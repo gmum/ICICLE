@@ -22,6 +22,12 @@ The prototypical parts-based models are adapted from the following repositories:
 - ProtoPNet: https://github.com/cfchen-duke/ProtoPNet
 - TesNet: https://github.com/JackeyWang96/TesNet
 
+### Data preparation
+
+Please use data preparation method from ProtoPNet repository https://github.com/cfchen-duke/ProtoPNet
+In the next step prepare text file describing the data as in `data_utils`
+Lastly, change path in the file `src/datasets/dataset_config.py`
+
 ### Running the code 
 
 To run ICICLE and obtain main results use the following command:
