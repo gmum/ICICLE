@@ -396,7 +396,6 @@ def update_prototypes_on_batch_protopool(search_batch_input,
                                          global_min_fmap_patches,  # this will be updated
                                          proto_rf_boxes,  # this will be updated
                                          proto_bound_boxes,  # this will be updated
-                                         prototype_class_identity,
                                          class_specific=True,
                                          search_y=None,  # required if class_specific == True
                                          num_classes=None,  # required if class_specific == True
