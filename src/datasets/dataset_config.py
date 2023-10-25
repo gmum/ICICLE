@@ -1,11 +1,11 @@
 from os.path import join
 
-_BASE_DATA_PATH = "/datatmp/datasets/"
+_BASE_DATA_PATH = "/shared/sets/datasets"
 
 dataset_config = {
 
     'cub_200_2011_cropped': {
-        'path': join(_BASE_DATA_PATH, 'cub_200_2011_cropped/'),
+        'path': join(_BASE_DATA_PATH, 'birds/'),
         'resize': (224, 224),
         'crop': None,
         'flip': False,

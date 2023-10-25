@@ -2,7 +2,7 @@ from torchvision import models
 
 # available torchvision models
 
-allmodels = ['resnet32', 'LeNet', 'VggNet', 'protopnet_resnet34', 'protopnet_resnet50Nat', 'tesnet_resnet34']
+allmodels = ['resnet32', 'LeNet', 'VggNet', 'protopnet_resnet34', 'protopnet_resnet50Nat', 'tesnet_resnet34', 'protopool_resnet34', 'protopool_resnet50Nat']
 
 
 def set_tvmodel_head_var(model):

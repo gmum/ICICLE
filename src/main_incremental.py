@@ -16,6 +16,7 @@ from loggers.exp_logger import MultiLogger
 from networks import allmodels
 from networks.protopartnet import PPNet
 from networks.tesnet import TesNet
+from networks.protopool import ProtoPool
 
 
 def main(argv=None):
@@ -115,6 +116,15 @@ def main(argv=None):
     parser.add_argument('--incorrect_weight_btw_tasks', action='store_true', help='Incorrect weights between heads')
     parser.add_argument('--repeat_task_0', action='store_true', help='Repeat task 0')
 
+    # ProtoPool args
+    parser.add_argument('--num_descriptive', type=int, default=10)
+    parser.add_argument('--pp_ortho', action='store_true')
+    parser.add_argument('--pp_gumbel', action='store_true')
+    parser.add_argument('--inat', action='store_true')
+    parser.add_argument('--gumbel_time', default=10, type=int)
+    parser.add_argument('--use_thresh', action='store_true')
+    parser.add_argument('--last_layer', action='store_true')
+
     # Args -- Incremental Learning Framework
     args, extra_args = parser.parse_known_args(argv)
     args.results_path = os.path.expanduser(args.results_path)
@@ -149,12 +159,12 @@ def main(argv=None):
 
     # Args -- Network
     from networks.network import LLL_Net, LLL_Net_PPNet
+    if args.nc_first_task is not None:
+        num_cls = args.nc_first_task
+    else:
+        num_cls = args.num_classes
     if 'protopnet' in args.network:
         from networks.protopartnet import construct_PPNet
-        if args.nc_first_task is not None:
-            num_cls = args.nc_first_task
-        else:
-            num_cls = args.num_classes
         init_model = construct_PPNet(
             args.network.replace('protopnet_', ''), pretrained=True, img_size=224,
             prototype_shape=(int(args.proto_num_per_class * num_cls), args.proto_depth, 1, 1), num_classes=int(num_cls),
@@ -172,10 +182,6 @@ def main(argv=None):
         )
     elif 'tesnet' in args.network:
         from networks.tesnet import construct_TesNet
-        if args.nc_first_task is not None:
-            num_cls = args.nc_first_task
-        else:
-            num_cls = args.num_classes
         init_model = construct_TesNet(
             args.network.replace('tesnet_', ''), pretrained=True, img_size=224,
             prototype_shape=(int(args.proto_num_per_class * num_cls), args.proto_depth, 1, 1), num_classes=int(num_cls),
@@ -190,6 +196,37 @@ def main(argv=None):
             incorrect_weight=args.incorrect_weight,
             incorrect_weight_btw_tasks=args.incorrect_weight_btw_tasks,
             repeat_task_0=args.repeat_task_0,
+        )
+    elif 'protopool' in args.network:
+        from networks.protopool import construct_ProtoPool
+        protos_per_pool = 51
+        init_model = construct_ProtoPool(
+            args.network.replace('protopool_', ''),
+            pretrained=True,
+            img_size=224,
+            prototype_shape=(protos_per_pool, args.proto_depth, 1, 1),
+            num_classes=int(num_cls),
+            prototype_activation_function=args.ppnet_sim,
+            add_on_layers_type='linear',
+            focal=args.focal,
+            warm_num=args.num_warm,
+            push_at=args.push_at,
+            num_push_tune=args.num_push_tune,
+            sep_weight=args.sep_weight,
+            share_add_ons=not args.sep_add_ons,
+            incorrect_weight=args.incorrect_weight,
+            incorrect_weight_btw_tasks=args.incorrect_weight_btw_tasks,
+            repeat_task_0=args.repeat_task_0,
+
+            pp_ortho=args.pp_ortho,
+            pp_gumbel=args.pp_gumbel,
+            gumbel_time=args.gumbel_time,
+            num_prototypes=protos_per_pool,
+            num_descriptive=args.num_descriptive,
+            use_thresh=args.use_thresh,
+            proto_depth=args.proto_depth,
+            use_last_layer=args.last_layer,
+            inat=args.inat,
         )
     else:  # other models declared in networks package's init
         net = getattr(importlib.import_module(name='networks'), args.network)
@@ -256,7 +293,7 @@ def main(argv=None):
 
     # Network and Approach instances
     utils.seed_everything(seed=args.seed)
-    if isinstance(init_model, PPNet) or isinstance(init_model, TesNet):
+    if isinstance(init_model, PPNet) or isinstance(init_model, TesNet) or isinstance(init_model, ProtoPool):
         net = LLL_Net_PPNet(init_model, remove_existing_head=not args.keep_existing_head)
     else:
         net = LLL_Net(init_model, remove_existing_head=not args.keep_existing_head)

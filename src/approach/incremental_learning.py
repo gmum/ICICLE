@@ -10,6 +10,8 @@ from networks.protopartnet import PPNet
 from networks.protopartnet import push as ppnet_push
 from networks.tesnet import TesNet
 from networks.tesnet import push as tesnet_push
+from networks.protopool import ProtoPool, dist_loss
+from networks.protopool import push as protopool_push
 
 
 class Inc_Learning_Appr:
@@ -195,7 +197,8 @@ class Inc_Learning_Appr:
         if self.fix_bn and t > 0:
             self.model.freeze_bn()
         for images, targets in trn_loader:
-            if isinstance(self.model.model, PPNet) or isinstance(self.model.model, TesNet):
+            if (isinstance(self.model.model, PPNet) or isinstance(self.model.model, TesNet) or
+                    isinstance(self.model.model, ProtoPool)):
                 outputs = self.model(images.to(self.device))
                 logits = [outputs[i][1] for i in range(len(outputs))]
                 min_distances = [outputs[i][2] for i in range(len(outputs))]
@@ -604,28 +607,29 @@ class Inc_Learning_Appr_PPNet(Inc_Learning_Appr):
         ax.set_ylabel("Mean of out-class proto activations", fontsize=6, fontfamily='serif')
         return f_proto, f_proto_per_class, f_proto_out_class
 
-    def protopnet_looses(self, min_distances, label, t, use_l1_mask=True, all_out=False):
+    def protopnet_looses(self, min_distances, label, t, use_l1_mask=True, all_out=False, proto_presence=None):
         if all_out and t > 0:
             min_distances = torch.cat(min_distances[:t + 1], dim=1)
         else:
             min_distances = min_distances[t]
             label = label - self.model.task_offset[t]
-        max_dist = (self.model.model.prototype_shape[1]
-                    * self.model.model.prototype_shape[2]
-                    * self.model.model.prototype_shape[3])
-        if all_out and t > 0:
-            prototypes_of_correct_class_m = torch.zeros(((t + 1) * self.model.model.num_prototypes,
-                                                         (t + 1) * self.model.model.num_classes,))
-            for i in range(t + 1):
-                prototypes_of_correct_class_m[
-                i * self.model.model.num_prototypes:(i + 1) * self.model.model.num_prototypes,
-                i * self.model.model.num_classes:(i + 1) * self.model.model.num_classes] = \
-                    self.model.heads[t].prototype_class_identity
-            prototypes_of_correct_class_m = prototypes_of_correct_class_m.cuda()
-            prototypes_of_correct_class = torch.t(prototypes_of_correct_class_m[:, label].cuda())
-        else:
-            prototypes_of_correct_class = torch.t(self.model.heads[t].prototype_class_identity[:, label]).cuda()
-        inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
+        if not isinstance(self.model.model, ProtoPool):
+            max_dist = (self.model.model.prototype_shape[1]
+                        * self.model.model.prototype_shape[2]
+                        * self.model.model.prototype_shape[3])
+            if all_out and t > 0:
+                prototypes_of_correct_class_m = torch.zeros(((t + 1) * self.model.model.num_prototypes,
+                                                             (t + 1) * self.model.model.num_classes,))
+                for i in range(t + 1):
+                    prototypes_of_correct_class_m[
+                    i * self.model.model.num_prototypes:(i + 1) * self.model.model.num_prototypes,
+                    i * self.model.model.num_classes:(i + 1) * self.model.model.num_classes] = \
+                        self.model.heads[t].prototype_class_identity
+                prototypes_of_correct_class_m = prototypes_of_correct_class_m.cuda()
+                prototypes_of_correct_class = torch.t(prototypes_of_correct_class_m[:, label].cuda())
+            else:
+                prototypes_of_correct_class = torch.t(self.model.heads[t].prototype_class_identity[:, label]).cuda()
+            inverted_distances, _ = torch.max((max_dist - min_distances) * prototypes_of_correct_class, dim=1)
 
         if isinstance(self.model.model, PPNet):
             # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
@@ -660,8 +664,9 @@ class Inc_Learning_Appr_PPNet(Inc_Learning_Appr):
                 l1 = self.model.heads[t].last_layer.weight.norm(p=1)
             if self.model.model.incorrect_weight_btw_tasks and len(self.model.heads) > 1:
                 l1 += self.model.neg_heads[t-1].weight.norm(p=1)
-            return cluster_cost, separation_cost, l1, avg_separation_cost, torch.zeros(1).cuda(), torch.zeros(1).cuda()
-        else:
+            return (cluster_cost, separation_cost, l1, avg_separation_cost,
+                    torch.zeros(1).cuda(), torch.zeros(1).cuda(), torch.zeros(1).cuda())
+        elif isinstance(self.model.model, TesNet):
             subspace_max_dist = (self.model.model.prototype_shape[0] * self.model.model.prototype_shape[2] *
                                  self.model.model.prototype_shape[3])  # 2000
             # prototypes_of_correct_class is a tensor of shape batch_size * num_prototypes
@@ -724,7 +729,32 @@ class Inc_Learning_Appr_PPNet(Inc_Learning_Appr):
             else:
                 l1 = self.model.heads[-1].last_layer.weight.norm(p=1)
             self.model.heads[-1].prototype_vectors.data = F.normalize(self.model.heads[-1].prototype_vectors, p=2, dim=1).data
-            return cluster_cost, separation_cost, l1, avg_separation_cost, orth_cost, subspace_sep
+            return (cluster_cost, separation_cost, l1, avg_separation_cost, orth_cost, subspace_sep,
+                    torch.zeros(1).cuda())
+        elif isinstance(self.model.model, ProtoPool):
+            label_p = label.detach().cpu().numpy().tolist()
+            pp_orthogonal_cost = torch.Tensor([0]).cuda()
+            if self.model.model.pp_ortho:
+                for c in range(0, proto_presence[t].shape[0], 1000):
+                    pp_orthogonal_cost_p = \
+                        torch.nn.functional.cosine_similarity(
+                            proto_presence[t].unsqueeze(2)[c:c + 1000],
+                            proto_presence[t].unsqueeze(-1)[c:c + 1000], dim=1).sum()
+                    pp_orthogonal_cost += pp_orthogonal_cost_p
+                pp_orthogonal_cost = pp_orthogonal_cost / (self.model.heads[-1].num_descriptive * self.model.heads[-1].num_classes) - 1
+            inverted_proto_presence = 1 - proto_presence[t]
+
+            l1_mask = 1 - torch.t(self.model.heads[-1].prototype_class_identity).cuda()
+            l1 = (self.model.heads[-1].last_layer.weight * l1_mask).norm(p=1)
+
+            cluster_cost = dist_loss(self.model.heads[-1], min_distances, proto_presence[t],
+                                     self.model.heads[-1].num_descriptive, label_p, all_out=all_out, t=t)
+            separation_cost = dist_loss(self.model.heads[-1], min_distances, inverted_proto_presence,
+                                        self.model.heads[-1].num_prototypes - self.model.heads[-1].num_descriptive,
+                                        label_p, sep=True, all_out=all_out, t=t)
+            avg_separation_cost = None
+            return (cluster_cost, separation_cost, l1, avg_separation_cost,
+                    torch.zeros(1).cuda(), torch.zeros(1).cuda(), pp_orthogonal_cost)
 
     def calculate_metrics(self, outputs, targets):
         """Contains the main Task-Aware and Task-Agnostic metrics"""
@@ -750,9 +780,12 @@ class Inc_Learning_Appr_PPNet(Inc_Learning_Appr):
     def push_model(self, train_push_loader, t, all_out=False):
         if isinstance(self.model.model, PPNet):
             push = ppnet_push
-        else:
+        elif isinstance(self.model.model, TesNet):
             push = tesnet_push
+        elif isinstance(self.model.model, ProtoPool):
+            push = protopool_push
         if all_out:
+            # not used for ProtoPool
             identities = [self.model.heads[i].prototype_class_identity for i in range(len(self.model.heads))]
             prototype_class_identity = torch.cat(identities, dim=1)
         else:

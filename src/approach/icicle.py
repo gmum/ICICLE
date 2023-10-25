@@ -5,6 +5,7 @@ from sklearn.cluster import KMeans
 
 from .incremental_learning import Inc_Learning_Appr_PPNet
 from networks.tesnet import TesNet
+from networks.protopool import ProtoPool
 from datasets.exemplars_dataset import ExemplarsDataset
 
 
@@ -104,6 +105,10 @@ class Appr(Inc_Learning_Appr_PPNet):
             push_params = [{'params': self.model.heads[t].last_layer.parameters(), 'lr': self.lr,
                             'weight_decay': self.wd},
                            ]
+        warm_params = warm_params + ([{'params': self.model.heads[t].proto_presence, 'lr': 3 * self.lr}] if
+                                     isinstance(self.model.model, ProtoPool) else [])
+        joint_params = joint_params + ([{'params': self.model.heads[t].proto_presence, 'lr': 3 * self.lr}] if
+                                       isinstance(self.model.model, ProtoPool) else [])
         if t > 0:
             joint_params.extend([
                 {'params': self.model.heads[i].prototype_vectors, 'lr': self.lr_old} for i in range(t)
@@ -118,7 +123,12 @@ class Appr(Inc_Learning_Appr_PPNet):
                 warm_params.extend([
                     {'params': self.model.heads[i].add_on_layers.parameters(), 'lr': self.lr_old} for i in range(t)
                 ])
-
+            warm_params = (warm_params +
+                           ([{'params': self.model.heads[i].proto_presence, 'lr': 3 * self.lr} for i in range(t)] if
+                            isinstance(self.model.model, ProtoPool) else []))
+            joint_params = (joint_params +
+                            ([{'params': self.model.heads[i].proto_presence, 'lr': 3 * self.lr} for i in range(t)] if
+                            isinstance(self.model.model, ProtoPool) else []))
 
         warm_optimizer = torch.optim.Adam(warm_params)
         joint_optimizer = torch.optim.Adam(joint_params)
@@ -250,11 +260,13 @@ class Appr(Inc_Learning_Appr_PPNet):
                 for p in self.model.neg_heads[t - 1].parameters():
                     p.requires_grad = False
 
+        gumbel_scale = self.model.model.lambda1(e) if \
+            (isinstance(self.model.model, ProtoPool) and self.model.model.pp_gumbel) else 0
         for images, targets in trn_loader:
             # Forward old model
             distances_old = None
             distances = None
-            outputs = self.model(images.to(self.device))
+            outputs = self.model(images.to(self.device), gumbel_scale=gumbel_scale)
             if t > 0:
                 if self.model.model.repeat_task_0:
                     init_t = 1 if t > 1 else 0
@@ -272,14 +284,17 @@ class Appr(Inc_Learning_Appr_PPNet):
             logits = [outputs[i][1] for i in range(len(outputs))]
             min_distances = [outputs[i][2] for i in range(len(outputs))]
             entropy_loss = self.criterion(t, logits, targets.to(self.device), distances, distances_old)
-            clst_loss_val, sep_loss_val, l1_loss, avg_separation_cost, orth_loss, sub_loss = self.protopnet_looses(
-                min_distances,
-                targets.to(self.device),
-                t,
-                all_out=self.exemplars_dataset is not None,
-            )
+            clst_loss_val, sep_loss_val, l1_loss, avg_separation_cost, orth_loss, sub_loss, pp_orthogonal_loss = (
+                self.protopnet_looses(
+                    min_distances,
+                    targets.to(self.device),
+                    t,
+                    all_out=self.exemplars_dataset is not None,
+                    proto_presence=[outputs[i][-1] for i in range(len(outputs))] if \
+                        isinstance(self.model.model, ProtoPool) else None
+            ))
             loss = entropy_loss + clst_loss_val * 0.8 + sep_loss_val * self.model.model.sep_weight + 1e-4 * l1_loss + \
-                       1e-4 * orth_loss - 1e-7 * sub_loss
+                       1e-4 * orth_loss - 1e-7 * sub_loss + pp_orthogonal_loss
             # Backward
             if e == 0:
                 self.optimizer = self.joint_optim
@@ -301,7 +316,7 @@ class Appr(Inc_Learning_Appr_PPNet):
 
     def eval(self, t, val_loader):
         """Contains the evaluation code"""
-        with torch.no_grad():
+        with (torch.no_grad()):
             total_loss, total_acc_taw, total_acc_tag, total_num, total_clst, total_sep, total_l1, total_avg_sep, total_entropy = \
                 0, 0, 0, 0, 0, 0, 0, 0, 0
             self.model.eval()
@@ -323,21 +338,24 @@ class Appr(Inc_Learning_Appr_PPNet):
                 min_distances = [outputs[i][2] for i in range(len(outputs))]
                 entropy_loss = self.criterion(t, logits, targets.to(self.device), distances, distances_old)
                 # Log
-                clst_loss_val, sep_loss_val, l1_loss, avg_sep_cost, orth_loss, sub_loss = self.protopnet_looses(
-                    min_distances,
-                    targets.to(self.device),
-                    t,
-                    all_out=self.exemplars_dataset is not None,
+                clst_loss_val, sep_loss_val, l1_loss, avg_sep_cost, orth_loss, sub_loss, pp_orthogonal_loss = \
+                    self.protopnet_looses(
+                        min_distances,
+                        targets.to(self.device),
+                        t,
+                        all_out=self.exemplars_dataset is not None,
+                        proto_presence=[outputs[i][-1] for i in range(len(outputs))] if \
+                            isinstance(self.model.model, ProtoPool) else None
                 )
                 loss = entropy_loss + clst_loss_val * 0.8 + sep_loss_val * self.model.model.sep_weight + 1e-4 * l1_loss + \
-                       1e-4 * orth_loss - 1e-7 * sub_loss
+                       1e-4 * orth_loss - 1e-7 * sub_loss + pp_orthogonal_loss
                 hits_taw, hits_tag = self.calculate_metrics(logits, targets)
                 # Log
                 total_loss += loss.item() * len(targets)
                 total_entropy += entropy_loss.item() * len(targets)
                 total_clst += clst_loss_val.item()
                 total_sep += sep_loss_val.item()
-                total_avg_sep += avg_sep_cost.item()
+                total_avg_sep += avg_sep_cost.item() if avg_sep_cost is not None else 0
                 total_l1 += l1_loss.item()
                 total_acc_taw += hits_taw.sum().item()
                 total_acc_tag += hits_tag.sum().item()

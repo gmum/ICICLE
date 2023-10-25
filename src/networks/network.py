@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from networks.protopartnet import PPNet, PPNet_head
 from networks.tesnet import TesNet, TesNet_head
+from networks.protopool import ProtoPool, ProtoPool_head
 
 
 class LLL_Net(nn.Module):
@@ -15,7 +16,7 @@ class LLL_Net(nn.Module):
         assert not remove_existing_head or hasattr(model, head_var), \
             "Given model does not have a variable called {}".format(head_var)
         assert not remove_existing_head or type(getattr(model, head_var)) in [nn.Sequential, nn.Linear, PPNet_head,
-                                                                              TesNet_head], \
+                                                                              TesNet_head, ProtoPool_head], \
             "Given model's head {} does is not an instance of nn.Sequential or nn.Linear".format(head_var)
         super(LLL_Net, self).__init__()
 
@@ -127,7 +128,7 @@ class LLL_Net_PPNet(LLL_Net):
                     first_add_on_layer_in_channels=self.model.first_add_on_layer_in_channels,
                 )
             )
-        else:
+        elif isinstance(self.model, TesNet):
             self.heads.append(
                 TesNet_head(
                     self.model.prototype_shape,
@@ -140,7 +141,21 @@ class LLL_Net_PPNet(LLL_Net):
                     first_add_on_layer_in_channels=self.model.first_add_on_layer_in_channels,
                 )
             )
-        if self.model.incorrect_weight_btw_tasks and (len(self.heads) > 1):
+        elif isinstance(self.model, ProtoPool):
+            self.heads.append(
+                ProtoPool_head(
+                    self.model.prototype_shape,
+                    self.model.num_prototypes,
+                    self.model.num_descriptive,
+                    num_outputs,
+                    self.model.prototype_activation_function,
+                    self.model.focal,
+                    incorrect_weight=self.model.incorrect_weight,
+                    share_add_ons=self.model.share_add_ons,
+                    first_add_on_layer_in_channels=self.model.first_add_on_layer_in_channels,
+                )
+            )
+        if self.model.incorrect_weight_btw_tasks and (len(self.heads) > 1) and not isinstance(self.model, ProtoPool):
             neg_ll = nn.Linear(len(self.heads) * num_outputs * self.model.prototypes_per_class,
                                len(self.heads) * num_outputs, bias=False)
             t = len(self.heads)
@@ -164,7 +179,7 @@ class LLL_Net_PPNet(LLL_Net):
         self.task_cls = torch.tensor([head.out_features for head in self.heads])
         self.task_offset = torch.cat([torch.LongTensor(1).zero_(), self.task_cls.cumsum(0)[:-1]])
 
-    def forward(self, x, return_features=False):
+    def forward(self, x, return_features=False, gumbel_scale=0):
         """Applies the forward pass
 
         Simplification to work on multi-head only -- returns all head outputs in a list
@@ -176,8 +191,12 @@ class LLL_Net_PPNet(LLL_Net):
         assert (len(self.heads) > 0), "Cannot access any head"
         y = []
         for i in range(len(self.heads)):
-            y.append(self.heads[i](x))
-        if self.model.incorrect_weight_btw_tasks and len(self.heads) > 1:
+            if isinstance(self.model, ProtoPool):
+                res = self.heads[i](x, gumbel_scale)
+            else:
+                res = self.heads[i](x)
+            y.append(res)
+        if self.model.incorrect_weight_btw_tasks and len(self.heads) > 1 and not isinstance(self.model, ProtoPool):
             min_dist = torch.cat([y[k][2] for k in range(len(y))], dim=1)
             neg_out = self.neg_heads[-1](self.heads[-1].distance_2_similarity(min_dist))
             for j in range(len(y)):
@@ -190,7 +209,7 @@ class LLL_Net_PPNet(LLL_Net):
             return y
 
     def push_forward(self, x, t):
-        if isinstance(self.model, PPNet):
+        if isinstance(self.model, PPNet) or isinstance(self.model, ProtoPool):
             return self.push_forward_p(x, t)
         else:
             return self.push_forward_t(x, t)
