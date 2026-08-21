@@ -58,3 +58,7 @@ If you find this work useful, please cite our paper:
 }
 
 ```
+
+## Acknowledgements 
+
+Joost van de Weijer and Bartłomiej Twardowski acknowledge the support from the Spanish Government funding for projects PID2019-104174GB-I00, TED2021132513B-I00, and grant RYC2021-032765-I, the European Commission under the Horizon 2020 Programme, funded by MCIN/AEI/10.13039/501100011033 and by European Union NextGenerationEU/PRTR. The work of Dawid Rymarczyk was supported by the National Science Centre (Poland), grant no. 2022/45/N/ST6/04147. He also received an incentive scholarship from the program Excellence Initiative - Research University funds at the Jagiellonian University in Kraków. The work of Bartosz Zieliński was funded by the National Science Centre (Poland) grant no. 2022/47/B/ST6/03397 and the research project “Bio-inspired artificial neural network” (grant no. POIR.04.04.00-00-14DE/18-00) within the Team-Net program of the Foundation for Polish Science co-financed by the European Union under the European Regional Development Fund. Finally, some experiments were performed on servers purchased with funds from a Priority Research Area (Artificial Intelligence Computing Center Core Facility) grant under the Strategic Programme Excellence Initiative at Jagiellonian University.
